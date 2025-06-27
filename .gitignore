@@ -1,0 +1,24 @@
+# Exclude all CSV output files except input files
+*.csv
+!sheet1.csv
+!sheet2.csv
+
+# Exclude Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Exclude OS files
+.DS_Store
+Thumbs.db
+
+# Exclude temporary files
+*.tmp
+*.temp
+*~
