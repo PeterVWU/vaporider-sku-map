@@ -59,6 +59,12 @@ def verify_mapping(sheet1_file: str, mapped_output_file: str):
     # Track which SKUs from Sheet1 were used
     used_skus = set()
     
+    # Track duplicates
+    sku_tracker = defaultdict(list)  # SKU -> [row_info, ...]
+    barcode_tracker = defaultdict(list)  # Barcode -> [row_info, ...]
+    duplicate_skus = []
+    duplicate_barcodes = []
+    
     print("Verifying mappings...")
     for i, row in enumerate(mapped_data):
         variant_sku = row.get('Variant SKU', '').strip()
@@ -67,12 +73,24 @@ def verify_mapping(sheet1_file: str, mapped_output_file: str):
         title = row.get('Title', '').strip()
         option1 = row.get('Option1 Value', '').strip()
         
-        # Count rows with SKU/Barcode data
+        # Count rows with SKU/Barcode data and track duplicates
+        row_info = {
+            'row': i + 2,  # +2 for header and 0-indexing
+            'handle': handle,
+            'title': title,
+            'option1': option1,
+            'sku': variant_sku,
+            'barcode': variant_barcode
+        }
+        
         if variant_sku:
             rows_with_sku += 1
             used_skus.add(variant_sku)
+            sku_tracker[variant_sku].append(row_info)
+            
         if variant_barcode:
             rows_with_barcode += 1
+            barcode_tracker[variant_barcode].append(row_info)
         
         # If this row has a SKU, verify it against Sheet1
         if variant_sku:
@@ -108,6 +126,33 @@ def verify_mapping(sheet1_file: str, mapped_output_file: str):
     all_sheet1_skus = set(sheet1_data.keys())
     unused_skus = all_sheet1_skus - used_skus
     
+    # Find duplicates
+    print("Checking for duplicates...")
+    for sku, row_list in sku_tracker.items():
+        if len(row_list) > 1:
+            for row_info in row_list:
+                duplicate_skus.append({
+                    'sku': sku,
+                    'row': row_info['row'],
+                    'handle': row_info['handle'],
+                    'title': row_info['title'],
+                    'option1': row_info['option1'],
+                    'total_occurrences': len(row_list)
+                })
+    
+    for barcode, row_list in barcode_tracker.items():
+        if len(row_list) > 1:
+            for row_info in row_list:
+                duplicate_barcodes.append({
+                    'barcode': barcode,
+                    'row': row_info['row'],
+                    'handle': row_info['handle'],
+                    'title': row_info['title'],
+                    'option1': row_info['option1'],
+                    'sku': row_info['sku'],
+                    'total_occurrences': len(row_list)
+                })
+    
     # Print verification results
     print("=== VERIFICATION RESULTS ===")
     print(f"Total rows in mapped output: {total_rows:,}")
@@ -117,6 +162,9 @@ def verify_mapping(sheet1_file: str, mapped_output_file: str):
     print(f"✅ Correct mappings: {correct_mappings:,}")
     print(f"❌ Incorrect barcode mappings: {incorrect_mappings:,}")
     print(f"⚠️  SKUs not found in Sheet1: {missing_in_sheet1:,}")
+    print()
+    print(f"🔄 Duplicate SKUs found: {len(duplicate_skus):,}")
+    print(f"🔄 Duplicate barcodes found: {len(duplicate_barcodes):,}")
     print()
     print(f"Sheet1 SKUs used: {len(used_skus):,} / {len(all_sheet1_skus):,} ({len(used_skus)/len(all_sheet1_skus)*100:.1f}%)")
     print(f"Sheet1 SKUs unused: {len(unused_skus):,}")
@@ -137,6 +185,36 @@ def verify_mapping(sheet1_file: str, mapped_output_file: str):
         for i, mismatch in enumerate(sku_mismatches[:5]):
             print(f"{i+1}. Row {mismatch['row']}: SKU {mismatch['sku']}")
             print(f"   Product: {mismatch['title']} - {mismatch['option1']}")
+            print()
+    
+    if duplicate_skus:
+        print("=== SAMPLE DUPLICATE SKUS ===")
+        # Group duplicates by SKU for better display
+        sku_groups = defaultdict(list)
+        for dup in duplicate_skus:
+            sku_groups[dup['sku']].append(dup)
+        
+        for i, (sku, dup_list) in enumerate(list(sku_groups.items())[:5]):
+            print(f"{i+1}. SKU '{sku}' appears {len(dup_list)} times:")
+            for dup in dup_list[:3]:  # Show first 3 occurrences
+                print(f"   Row {dup['row']}: {dup['title']} - {dup['option1']}")
+            if len(dup_list) > 3:
+                print(f"   ... and {len(dup_list) - 3} more")
+            print()
+    
+    if duplicate_barcodes:
+        print("=== SAMPLE DUPLICATE BARCODES ===")
+        # Group duplicates by barcode for better display
+        barcode_groups = defaultdict(list)
+        for dup in duplicate_barcodes:
+            barcode_groups[dup['barcode']].append(dup)
+        
+        for i, (barcode, dup_list) in enumerate(list(barcode_groups.items())[:5]):
+            print(f"{i+1}. Barcode '{barcode}' appears {len(dup_list)} times:")
+            for dup in dup_list[:3]:  # Show first 3 occurrences
+                print(f"   Row {dup['row']}: SKU {dup['sku']} - {dup['title']} - {dup['option1']}")
+            if len(dup_list) > 3:
+                print(f"   ... and {len(dup_list) - 3} more")
             print()
     
     # Write detailed error reports
@@ -166,18 +244,45 @@ def verify_mapping(sheet1_file: str, mapped_output_file: str):
                 if sku in sheet1_data:
                     writer.writerow([sku, sheet1_data[sku]['name'], sheet1_data[sku]['barcode']])
     
+    if duplicate_skus:
+        print(f"Writing {len(duplicate_skus)} duplicate SKUs to 'duplicate_skus_detailed.csv'...")
+        with open('duplicate_skus_detailed.csv', 'w', encoding='utf-8', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['SKU', 'Row', 'Handle', 'Title', 'Option1', 'Total_Occurrences'])
+            for dup in duplicate_skus:
+                writer.writerow([dup['sku'], dup['row'], dup['handle'], dup['title'], 
+                               dup['option1'], dup['total_occurrences']])
+    
+    if duplicate_barcodes:
+        print(f"Writing {len(duplicate_barcodes)} duplicate barcodes to 'duplicate_barcodes_detailed.csv'...")
+        with open('duplicate_barcodes_detailed.csv', 'w', encoding='utf-8', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Barcode', 'SKU', 'Row', 'Handle', 'Title', 'Option1', 'Total_Occurrences'])
+            for dup in duplicate_barcodes:
+                writer.writerow([dup['barcode'], dup['sku'], dup['row'], dup['handle'], 
+                               dup['title'], dup['option1'], dup['total_occurrences']])
+    
     # Overall assessment
     print("\n=== OVERALL ASSESSMENT ===")
-    if incorrect_mappings == 0 and missing_in_sheet1 == 0:
-        print("🎉 PERFECT! All mappings are correct.")
-    elif incorrect_mappings == 0:
+    total_issues = incorrect_mappings + missing_in_sheet1
+    total_duplicates = len(duplicate_skus) + len(duplicate_barcodes)
+    
+    if total_issues == 0 and total_duplicates == 0:
+        print("🎉 PERFECT! All mappings are correct and no duplicates found.")
+    elif total_issues == 0:
         print("✅ All SKU→Barcode mappings are correct.")
-        print(f"⚠️  {missing_in_sheet1} SKUs in output don't exist in Sheet1 (these may be new products).")
+        if total_duplicates > 0:
+            print(f"⚠️  Found {len(duplicate_skus)} duplicate SKUs and {len(duplicate_barcodes)} duplicate barcodes.")
     else:
-        print(f"⚠️  Found {incorrect_mappings + missing_in_sheet1} issues that need attention.")
+        print(f"⚠️  Found {total_issues} mapping issues that need attention.")
+        if total_duplicates > 0:
+            print(f"🔄 Additionally found {len(duplicate_skus)} duplicate SKUs and {len(duplicate_barcodes)} duplicate barcodes.")
     
     accuracy = correct_mappings / max(rows_with_sku, 1) * 100
     print(f"Mapping accuracy: {accuracy:.1f}%")
+    
+    if total_duplicates > 0:
+        print(f"⚠️  Duplicate data may cause issues in Odoo import - review detailed reports.")
 
 
 if __name__ == "__main__":
